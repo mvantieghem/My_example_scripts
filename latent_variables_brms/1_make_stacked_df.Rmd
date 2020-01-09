@@ -1,0 +1,105 @@
+---
+title: "making long dataset for Bayesian latent variables"
+author: "Michelle.VanTieghem"
+date: "June 12, 2018"
+output: 
+    html_document:
+        toc: yes
+        toc_float:
+            smooth_scroll: true
+            collapsed: false
+        number_sections: false
+---
+
+
+```{r, warnings = F, include = F}
+
+library(tidyverse)
+library(readxl)
+```
+
+# 1.load dataset 
+
+```{r}
+load("../../../data/2_fs_data/3_cleaned_fsdata_for_growth_chart_brain_age_yrs6_19.Rdata")
+#names(fsdata6)
+```
+
+## clean up like other dataset
+```{r}
+
+fsdata6$IDENT_SUBTYPE <- ifelse(fsdata6$GROUP == "PI", 1, 0)
+brain_df <- fsdata6 %>% 
+  select(
+    # demographics 
+    IDENT_SUBID, SUBJECTID_long, IDENT_SUBTYPE, DEM_3_GENDER_CHILD, brain_age_yrs, 
+        # variable of interest 
+    Amyg_ave, Hipp_ave, 
+    # timing variable
+    index_wave,
+    # covariates 
+    ICV, motion_ave_new, aseg_ave_rating)
+
+# check that no missing data. 
+sum(is.na(brain_df$ICV))
+nrow(brain_df)
+
+# RESCALE HIPP VOLUME & AMYG VOLUME
+brain_df$Hipp_rescaled <- brain_df$Hipp_ave / 1000
+brain_df$Amyg_rescaled <- brain_df$Amyg_ave / 1000
+
+```
+
+## stack amygdala and hipp, with incidator variable.
+```{r}
+# now only take HIPP values + covariates
+Hipp_merge <- brain_df %>% 
+  select(IDENT_SUBID, SUBJECTID_long, index_wave, Hipp_rescaled)
+
+# now only take AMYG values + covariates
+Amyg_merge <- brain_df %>% 
+  select(IDENT_SUBID, SUBJECTID_long, index_wave, Amyg_rescaled)
+
+# save covariates 
+Hipp_covariates <- brain_df %>% 
+  select( -Hipp_rescaled)
+
+# if yu had a different set of important covariates for the other varirable, save them here.
+# for amygdala and hipp they are the same covariates! 
+#Amyg_covariates <- brain_df %>% 
+ # select( -Amyg_rescaled)
+
+# rename Amyg_rescaled and Hipp_rescaled so they are both labeled 'outcome'
+# so that they have identical column names for stacking 
+names(Amyg_merge)[4] <- "outcome"
+# rename so identical variables for RBIND
+names(Hipp_merge)[4] <- "outcome"
+
+
+# indicator will differerntiate rows with hipp vs. amygdala data 
+Hipp_merge$indicator_amyg <- 0
+Amyg_merge$indicator_amyg <- 1
+
+# use RBIND to stack the dataframes on top of eachother 
+stack_df <- rbind(Amyg_merge, Hipp_merge)
+
+# now add covariates 
+stack_df3 <- merge(stack_df, Amyg_covariates, by = c("IDENT_SUBID", "index_wave"), all = T)
+nrow(stack_df3) # 2890
+
+stack_df4 <- merge(stack_df3, Hipp_covariates, by =  c("IDENT_SUBID", "index_wave"), all = T)
+nrow(stack_df4) 
+```
+
+
+
+## save data 
+this has one row per wave per subject
+```{r}
+# rename dataset 
+merged_brms <- stack_df4
+# save! 
+save(merged_brms, file="../../../data/8_mixed_effects_brms/super_long_HIPP_AMYG_long_stacked_df.Rdata")
+
+```
+

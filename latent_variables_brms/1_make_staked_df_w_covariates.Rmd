@@ -1,0 +1,182 @@
+---
+title: "making a stacked df for amyg-cort with covariates "
+author: "Michelle.VanTieghem"
+date: "June 12, 2018"
+output: 
+    html_document:
+        toc: yes
+        toc_float:
+            smooth_scroll: true
+            collapsed: false
+        number_sections: false
+--- 
+
+```{r, warnings = F, include = F}
+
+library(tidyverse)
+library(readxl)
+```
+
+# load data file for longitudinal cort. 
+updated file from June 2018 corrections from Marta and added testosterone. 
+```{r, warnings = F}
+load( "../../..data/1_NEW_cort_and_T_marta_version_data/Marta_v_2A_long_cort_testos_cleaned.Rdata")
+```
+
+## make a SUBJECTID_long variable to use for merging later
+```{r}
+
+cort_merge8$SUBJECTID_long <- ifelse(cort_merge8$index_wave == 2, 
+                                      paste0(cort_merge8$IDENT_SUBID, "_fu1"),
+                               ifelse(cort_merge8$index_wave == 3, 
+                                      paste0(cort_merge8$IDENT_SUBID, "_fu2"), 
+                                      as.character(cort_merge8$IDENT_SUBID)))
+
+```
+
+
+## clean this up a little so that only essential variables are included. 
+```{r}
+cort_df <- cort_merge8 %>%
+  select(
+    # demographic variables that will match brain stuff. 
+    IDENT_SUBID, SUBJECTID_long, IDENT_SUBTYPE, DEM_3_GENDER_CHILD,  corrected_cort_age_yrs, 
+    # actual variable of interest (after excluding outliers.)    
+     cort_values_fixed_no_outliers,
+         # timing variables 
+         index20, index4, time_of_day,index_day, time_of_day, index_wave, batch,
+    # covariates that are impt to keep.
+        testos_cleaned, meds_by_wave, PDS_mean, person.centered.time)
+```
+
+
+# add freesurfer data
+note: this is already cleaned, and ages 4-19. 
+
+## loading 
+```{r}
+load("../../../data/2_fs_data/3_cleaned_fsdata_for_growth_chart_brain_age_yrs4_19.Rdata")
+#names(fsdata6)
+```
+
+## clean up like other dataset
+```{r}
+
+fsdata6$IDENT_SUBTYPE <- ifelse(fsdata6$GROUP == "PI", 1, 0)
+brain_df <- fsdata6 %>% 
+  select(
+    # demographics 
+    IDENT_SUBID, SUBJECTID_long, IDENT_SUBTYPE, DEM_3_GENDER_CHILD, brain_age_yrs, 
+        # variable of interest 
+    Hipp_ave, Amyg_ave, 
+    # timing variable
+    index_wave,
+    # covariates 
+    ICV, motion_ave_new, aseg_ave_rating)
+
+
+# check that no missing data. 
+sum(is.na(brain_df$ICV))
+nrow(brain_df) # should be 288 columns with 
+
+# RESCALE 
+brain_df$Amyg_rescaled <- brain_df$Amyg_ave / 1000
+
+```
+
+## stack cort and brain data 
+
+```{r}
+# take only essential variables here for now. 
+cort_merge <- cort_df %>%
+  filter(time_of_day == "waking") %>%
+  select(IDENT_SUBID, SUBJECTID_long, index_wave, cort_values_fixed_no_outliers) 
+
+# take everything else as covariates, BUT NOT THE NESTED THINGS (index4, index20, time of day, etc)
+cort_covariates <- cort_df %>% 
+  filter(time_of_day == "waking") %>%
+  select(IDENT_SUBID, SUBJECTID_long, index_wave, IDENT_SUBTYPE, batch, PDS_mean, testos_cleaned, 
+         meds_by_wave, corrected_cort_age_yrs) %>% 
+  group_by(IDENT_SUBID, index_wave) %>%
+  summarize( #index_wave = mean(as.numeric(as.character(index_wave))), 
+             IDENT_SUBTYPE = mean(IDENT_SUBTYPE),
+             batch = mean(batch, na.rm = T),
+             PDS_mean = mean(PDS_mean, na.rm = T),
+             testos_cleaned = mean(testos_cleaned, na.rm = T), 
+             meds_by_wave = mean(as.numeric(as.character(meds_by_wave)), na.rm = T),
+             corrected_cort_age_yrs = mean(corrected_cort_age_yrs), na.rm = T)
+
+
+# now only take brain values 
+brain_merge <- brain_df %>% 
+  select(IDENT_SUBID, SUBJECTID_long, index_wave, Amyg_rescaled)
+
+
+# save the covariates 
+brain_covariates <- brain_df %>% 
+  select( -Amyg_rescaled, -DEM_3_GENDER_CHILD)
+
+
+# rename Amyg_rescaled and Hipp_rescaled so they are both labeled 'outcome'
+# so that they have identical column names for stacking names(brain_merge)[4] <- "outcome"
+names(cort_merge)[4] <- "outcome"
+names(brain_merge)[4] <- "outcome"
+
+# rename this so clear what it indicates 
+brain_merge$cort_indicator <- 0
+cort_merge$cort_indicator <- 1
+
+# use RBIND to stack the variables on top of eachother 
+# this will only work if they have identical column names 
+stack_df <- rbind(cort_merge, brain_merge)
+
+# now add covariates in 
+# when adding cort covariates, values will be NA for brain rows
+stack_df3 <- merge(stack_df2, cort_covariates, by = c("IDENT_SUBID", "index_wave"), all = T)
+
+# when adding brain covariates, values will be NA for cort rows. 
+stack_df4 <- merge(stack_df3, brain_covariates, by =  c("IDENT_SUBID", "index_wave"), all = T)
+
+```
+
+## modifying covariates to change NA to zeros. 
+```{r}
+# brain only 
+stack_df4$ICV[is.na(stack_df4$ICV)] <- 0
+stack_df4$aseg_ave_rating[is.na(stack_df4$aseg_ave_rating)] <- 0
+stack_df4$motion_ave_new[is.na(stack_df4$motion_ave_new)] <- 0
+stack_df4$scanner_confound <- ifelse(stack_df4$index_wave == 3, 1, 0)
+sum(is.na(stack_df4$scanner_confound))
+
+# cort only 
+stack_df4$meds_by_wave[is.na(stack_df4$meds_by_wave)] <- 0
+stack_df4$index20[is.na(stack_df4$index20)] <- 0
+stack_df4$batch[is.na(stack_df4$batch)] <- 0
+stack_df4$index_day[is.na(stack_df4$index_day)] <- 0
+
+```
+
+## add more variables you need from master! 
+only getting partial master data, stuff i will need.
+```{r}
+
+master <- read.csv("../../../data/master/J.Data_Entry_Master_8_17_2017_fixed_fixed.csv")
+
+master2 <- master %>% 
+  select(IDENT_SUBID, IDENT_SUBTYPE, DEM_3_GENDER_CHILD)
+
+# add in these variables into long format! 
+# note not using "full" option here, because don't want anyone included 
+# in the dataset who doesn't have at least ONE VARIABLE of interest.
+merged_brms <- merge(stack_df4, master2, by = "IDENT_SUBID")
+
+```
+
+## save data 
+this has one row per wave per subject
+```{r}
+
+save(merged_brms, file="../../../data/8_mixed_effects_brms/cort_super_long_Amyg_long_stacked_df_2019-01-19.Rdata")
+
+```
+

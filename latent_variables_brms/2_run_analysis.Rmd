@@ -1,0 +1,106 @@
+---
+title: "mixed effects SEM style with BRMS"
+author: "Michelle.VanTieghem"
+date: "10/9/2018"
+output: html_document
+---
+
+# Readme 
+attempting to test niall's multilevel SEM through random effects in BRMS 
+use cores = 4 argument to run in parallel!! 
+
+useful info:
+# pulling out fixed effects only 
+fixef(test) 
+# pulling out random effects
+ranef(test)
+## pulling out both combined 
+coef(test)
+
+# load data
+
+```{r}
+
+load(file="../../../../data/archived/8_mixed_effects_brms/super_long_Hipp_Amyg_long_stacked_df.Rdata")
+# check data structure 
+head(merged_brms)
+```
+
+```{r}
+# load packages 
+library(lme4)
+library(tidyverse)
+library(brms) # for baysian models
+library(shinystan) # not sure if u need this?
+```
+
+## clean data more
+```{R}
+## need to make a scanner coefficient to control for 
+merged_brms$scanner_confound <- as.factor(ifelse(merged_brms$index_wave == 3, 1, 0))
+summary(merged_brms$scanner_confound)
+
+##  make a centered- age variable 
+merged_brms$AGE <- merged_brms$HIPP_age_yrs.x
+
+# mean age = 10.5
+merged_brms$AGE.c <- merged_brms$AGE - mean(merged_brms$AGE)
+hist(merged_brms$AGE.c)
+
+## make indicator variables 
+merged_brms$AMYG<- with(merged_brms, ifelse(indicator_amyg ==1, 1, 0))
+merged_brms$HIPP <- with(merged_brms, ifelse(indicator_amyg == 0, 1, 0))
+
+# check indicator variables
+summary(as.factor(merged_brms$AMYG))
+summary(as.factor(merged_brms$HIPP))
+
+# make indicator X Age variables 
+merged_brms$AMYGxAGE.c <- merged_brms$AMYG*merged_brms$AGE.c
+merged_brms$HIPPxAGE.c <- merged_brms$HIPP*merged_brms$AGE.c
+
+## center all covariates 
+merged_waking$ICV <- merged_waking$ICV.x/ 10000 # rescale first.
+merged_waking$ICV.c <- merged_waking$ICV.x - mean(merged_waking$ICV.x, na.rm = T)
+merged_waking$testos_cleaned.c <- merged_waking$testos_cleaned - mean(merged_waking$testos_cleaned, na.rm = T)
+merged_waking$sex.c <- merged_waking$DEM_3_GENDER_CHILD.x - mean(merged_waking$DEM_3_GENDER_CHILD.x)
+```
+
+## model with AMYG + HIPP
+once i included the fixed effects properly, there is no correlation of random effects. 
+```{r}
+
+model1 <- brm(outcome ~ 
+                       # note: -1 is necessary to remove the overall model intercept 
+                    # so it will calculate separate intercepts for age and AMYG and reduce the colinearity!! 
+                       -1 + 
+                       # fixed effects for amygdala intercept/change, hipp intercept/change and covariates.
+                       AMYG + AMYGxAGE.c + HIPP + HIPPxAGE.c + sex.c + IDENT_SUBTYPE + 
+                       
+                       # random effects for amygdala intercept/change and hipp intercept/change 
+                   (-1 + AMYG + AMYGxAGE.c + HIPP + HIPPxAGE.c | IDENT_SUBID), 
+                    data = merged_waking, 
+                   # recommended settings for chains = 4
+                   # cores = 4 means it will run on 4 cores on your computer (if possible)
+                   chains = 4, cores = 4, 
+                   # control options will help if model doesn't converge.
+                    control = list(max_treedepth = 15))
+# save 
+save(model1, file = "models/model1_results.Rdata")
+summary(model1) 
+```
+
+
+## pull out the model correlations for random effects
+showing whether individual intercept/slopes between amyg and hipp are correlated.
+```{r}
+mod_ranef_corr <- summary(model1)$random
+mod_cor_AMYG_AMYGxAGE.c <- mod_ranef_corr$IDENT_SUBID[5]
+mod_cor_AMYG_HIPP <- mod_ranef_corr$IDENT_SUBID[6]
+mod_cor_AMYGxAGE.c_HIPP <- mod_ranef_corr$IDENT_SUBID[7]
+mod_cor_AMYG_HIPPxAGE.c <- mod_ranef_corr$IDENT_SUBID[8]
+mod_cor_AMYGxAGE.c_HIPPxAGE.c <- mod_ranef_corr$IDENT_SUBID[9]
+mod_cor_HIPP.c_HIPPxAGE.c <- mod_ranef_corr$IDENT_SUBID[10]
+```
+
+

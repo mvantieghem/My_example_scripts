@@ -1,0 +1,130 @@
+---
+title: "Latent variable analysis using lavaan package"
+author: "Michelle.VanTieghem"
+date: "Oct 3, 2018"
+output: 
+    html_document:
+        toc: yes
+        toc_float:
+            smooth_scroll: true
+            collapsed: false
+        number_sections: true
+---
+# Readme 
+This does not include covariates or complicated models 
+More info on lavaan package: http://lavaan.ugent.be/tutorial/index.html
+
+
+```{r}
+library(lavaan)
+
+# this is data for small subset of subjects with 3 time points! 
+load("../../../../data/SEM_model_data/cleaned_all_data_3tp_cort_brain_wide_format.Rdata")
+
+# only including above age 6.
+df_wide <- subset(df_wide, Age_wave1 >= 6)
+length(unique(df_wide$IDENT_SUBID))
+```
+
+## rescale variables 
+```{r}
+
+df_wide$Amyg_wave1 <- df_wide$Amyg_wave1/100
+df_wide$Amyg_wave2 <- df_wide$Amyg_wave2/100
+df_wide$Amyg_wave3 <- df_wide$Amyg_wave3/100
+df_wide$Hipp_wave1 <- df_wide$Hipp_wave1/100
+df_wide$Hipp_wave2 <- df_wide$Hipp_wave2/100
+df_wide$Hipp_wave3 <- df_wide$Amyg_wave3/100
+df_wide$ICV_wave1 <- df_wide$ICV_wave1 /100000
+df_wide$ICV_wave2 <- df_wide$ICV_wave2 /100000
+
+df_wide$ICV_wave3 <- df_wide$ICV_wave3/100000
+```
+
+## diagnostic plots 
+```{r}
+hist(df_wide$ICV_wave1)
+#remove this outlier.
+df_wide <- subset(df_wide, ICV_wave1 < 25 | is.na(ICV_wave1))
+nrow(df_wide)
+hist(df_wide$ICV_wave2)
+hist(df_wide$Hipp_wave1)
+hist(df_wide$Hipp_wave2)
+hist(df_wide$slope_wave1)
+hist(df_wide$slope_wave2)
+# slope should not be negative. exclude 
+df_wide <- subset(df_wide, slope_wave2 > 0 | is.na(slope_wave2))
+
+FINAL_SUBLIST <- unique(df_wide$IDENT_SUBID)
+length(FINAL_SUBLIST)
+```
+
+
+## center variables 
+```{r}
+df_wide$GROUP.c <- with(df_wide, ifelse(IDENT_SUBTYPE == 0, -0.5, 0.5))
+df_wide$sex.c <- with(df_wide, ifelse(sex == 0, -0.5, 0.5))
+
+df_wide$Age_wave1.c <- df_wide$Age_wave1 - mean(df_wide$Age_wave1, na.rm = T)
+df_wide$Age_wave2.c <- df_wide$Age_wave2 - mean(df_wide$Age_wave2, na.rm = T)
+
+df_wide$slope_wave1.c <- df_wide$slope_wave1 - mean(df_wide$slope_wave1, na.rm = T)
+df_wide$slope_wave2.c <- df_wide$slope_wave2 - mean(df_wide$slope_wave2, na.rm = T)
+df_wide$slope_wave3.c <- df_wide$slope_wave3 - mean(df_wide$slope_wave3, na.rm = T)
+
+df_wide$Hipp_wave1.c <- df_wide$Hipp_wave1 - mean(df_wide$Hipp_wave1, na.rm = T)
+df_wide$Hipp_wave2.c <- df_wide$Hipp_wave2 - mean(df_wide$Hipp_wave2, na.rm = T)
+df_wide$Hipp_wave3.c <- df_wide$Hipp_wave3 - mean(df_wide$Hipp_wave3, na.rm = T)
+
+df_wide$Amyg_wave1.c <- df_wide$Amyg_wave1 - mean(df_wide$Amyg_wave1, na.rm = T)
+df_wide$Amyg_wave2.c <- df_wide$Amyg_wave2 - mean(df_wide$Amyg_wave2, na.rm = T)
+df_wide$Amyg_wave3.c <- df_wide$Amyg_wave3 - mean(df_wide$Amyg_wave3, na.rm = T)
+
+df_wide$ICV_wave1.c <- df_wide$ICV_wave1 - mean(df_wide$ICV_wave1, na.rm = T)
+df_wide$ICV_wave2.c <- df_wide$ICV_wave2 - mean(df_wide$ICV_wave2, na.rm = T)
+df_wide$ICV_wave3.c <- df_wide$ICV_wave3 - mean(df_wide$ICV_wave3, na.rm = T)
+```
+
+
+# make the model
+
+## latent growth of cortisol measurements 
+```{r}
+model <- "
+# measurement models 
+cort_slope_intercept =~1* slope_wave1.c +  1*slope_wave2.c + 1*slope_wave3.c
+cort_change =~ 0*slope_wave1.c + 1*slope_wave2.c + 2*slope_wave3.c
+
+# covariances 
+cort_slope_intercept ~~ cort_change 
+"
+
+fit <- sem(model, data =  df_wide, fixed.x = F, missing='fiml')
+# fit.measures will print out the relevant model fit indices 
+# standardized will provide standardized estimates 
+summary(fit,fit.measures=TRUE, standardized=TRUE, rsquare=TRUE) 
+```
+
+
+## important things to check from model. 
+```{r}
+# tells you how much coverage you have across the cells 
+# rule of thumb: greater than 30, I don't have that here! 
+lavInspect(fit, "coverage") 
+
+# model indices 
+lavInspect (fit, "modindices")
+parTable(fit)
+```
+
+
+### getting predicted values of cortisol factors!!! 
+```{r}
+	
+#A character string. If "lv", estimated values for the latent variables in the model are computed. If "ov", model predicted values for the indicators of the latent variables in the model are computed. If "yhat", the estimated value for the observed indicators, given user-specified values for the latent variables provided by de ETA argument. If "fy", densities (or probabilities) for each observed indicator, given user-specified values for the latent variables provided by de ETA argument.
+
+id <- lavInspect(fit, "case.idx")
+fitted_cort <- lavPredict(fit, type = "lv")
+
+df_cort <- data.frame(id, fitted_cort)
+```

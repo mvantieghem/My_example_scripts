@@ -1,0 +1,188 @@
+---
+title: "mixed effects SEM style with BRMS"
+author: "Michelle.VanTieghem"
+date: "10/9/2018"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    number_sections: yes
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+---
+
+# Read me 
+attempting to test niall's multilevel SEM through random effects in BRMS 
+cores = 4 argument to run parallel!
+updating Jan 12, 2018 to change model specs to separate between and within subj age.
+
+
+# load data 
+```{r}
+
+load(file="../../../data/8_mixed_effects_brms/cort_super_long_Amyg_long_stacked_df_2019-01-19.Rdata")
+head(merged_brms)
+
+library(tidyverse)
+library(brms)
+```
+
+
+# make age variables 
+## age per wave (across cort and brain because may have one or the other)
+```{r}
+merged_brms$AGE <- with(merged_brms, # if we have scan age, use that, else, use cort age.
+                        ifelse(!is.na(brain_age_yrs), brain_age_yrs, corrected_cort_age_yrs))
+sum(is.na(merged_brms$AGE))
+
+merged_brms$AGE.c <- merged_brms$AGE - mean(merged_brms$AGE)
+hist(merged_brms$AGE.c)
+
+```
+
+### age at baseline (age intercept)
+we do want to mean center this, so average age = 9.8
+```{r}
+sublist <- unique(merged_brms$IDENT_SUBID)
+length(sublist)
+merged_brms$Age_wave1 <- NA
+merged_brms$index_wave <- as.numeric(as.character(merged_brms$index_wave))
+
+for (sub in sublist){
+#  print(sub)
+  min_wave <- merged_brms %>%
+    group_by(IDENT_SUBID) %>%
+    filter(IDENT_SUBID == sub)  %>%
+    summarize(min_wave = min(index_wave))
+   keep_age <- merged_brms$AGE[merged_brms$index_wave == min_wave$min_wave & merged_brms$IDENT_SUBID == sub]
+  merged_brms$Age_wave1[merged_brms$IDENT_SUBID == sub] <- keep_age[1]
+}
+
+# mean center at age 9.8
+mean(merged_brms$Age_wave1)
+merged_brms$Age_wave1.c <- merged_brms$Age_wave1 - mean(merged_brms$Age_wave1)
+hist(merged_brms$Age_wave1)
+```
+
+### age change (within subject)
+ we do not want to mean center this, we want 0 = baseline.
+```{r}
+# for whatever row is whatever wave, subtract it from the baseline age for that subject 
+# to get how many years later that wave of data happened (or 0)
+merged_brms$Age_change <- merged_brms$AGE - merged_brms$Age_wave1
+mean(merged_brms$Age_change)
+
+# check that this worked 
+wave1 <- merged_brms %>%
+  filter(index_wave == 1) 
+
+summary(wave1$Age_change)
+
+# wave 2 may be baseline for some subjects, so min =0 
+wave2 <- merged_brms %>%
+  filter(index_wave == 2) 
+
+summary(wave2$Age_change)
+
+# wave 3 may be baseline for some subjets.
+wave3 <- merged_brms %>%
+  filter(index_wave == 3) 
+
+summary(wave3$Age_change)
+```
+
+
+## need to make indicator variables 
+```{r}
+# indicator for each set of data 
+merged_brms$CORT <- with(merged_brms, ifelse(indicator_cort ==1, 1, 0))
+merged_brms$BRAIN <- with(merged_brms, ifelse(indicator_cort == 0, 1, 0))
+
+# check indicator variables
+summary(as.factor(merged_brms$CORT))
+summary(as.factor(merged_brms$BRAIN))
+
+# make indicator X Age intercept variables 
+merged_brms$CORTxAge_wave1.c <- merged_brms$CORT*merged_brms$Age_wave1.c
+merged_brms$BRAINxAge_wave1.c <- merged_brms$BRAIN*merged_brms$Age_wave1.c
+
+# make indicator X Age change variables 
+merged_brms$CORTxAge_change<- merged_brms$CORT*merged_brms$Age_change
+merged_brms$BRAINxAge_change <- merged_brms$BRAIN*merged_brms$Age_change
+
+```
+
+
+## center all covariates and check no NAs
+even for covariates only relevant to cort, should still be ZERO (ie. batch)
+even for covariates only relevant to brain, should still be zero (i.e. ICV)
+```{r}
+
+merged_brms$ICV <- merged_brms$ICV/ 10000 # rescale first.
+merged_brms$ICV.c <- merged_brms$ICV - mean(merged_brms$ICV, na.rm = T)
+
+merged_brms$sex.c <- merged_brms$DEM_3_GENDER_CHILD - mean(merged_brms$DEM_3_GENDER_CHILD)
+sum(is.na(merged_brms$sex.c))
+
+# mean center batch covariate. 
+merged_brms$batch.c <- as.numeric(as.character(merged_brms$batch)) - mean(as.numeric(as.character(merged_brms$batch)), na.rm = T)
+
+sum(is.na(merged_brms$batch))
+sum(is.na(merged_brms$ICV))
+```
+
+
+## model with cort + brain
+no correlation of random effects. 
+```{r}
+
+model1 <- brm(outcome ~ 
+                # NEED the -1 to remove the intercept 
+      # so it will calculate separate intercepts for age and cort and reduce the colinearity!! 
+                -1 + 
+              # intercept, fixed effects of age, fixed effects of age change
+              CORT + CORTxAge_wave1.c +  CORTxAge_change +
+              BRAIN + BRAINxAge_wave1.c + BRAINxAge_change +
+              # covariates
+                sex.c +
+              # random intercepts and slopes for age change within subject
+                (-1 +  CORT + CORTxAge_change +
+                BRAIN +  BRAINxAge_change | IDENT_SUBID), 
+              data = merged_brms, chains = 4, cores = 4, 
+             control = list(max_treedepth = 15))
+
+#save(model1, file = "brms_cort_brain_stacked_with_age_int_and_age_change.Rdata")
+#load("~/Documents/Columbia/LabDATA/Projects/git_repos/structural_analysis_2018/scripts/not_manuscript/8_mixed_effects_brms/amygdala/models/brms_cort_brain_stacked_with_age_int_and_age_change.Rdata")
+
+summary(model1)$random
+
+```
+
+## Add covariates to  model 
+```{r}
+model2 <- brm(outcome ~ 
+                # NEED the -1 to remove the intercept 
+            # so it will calculate separate intercepts for age and cort and reduce the colinearity!! 
+                -1 + 
+              # intercept, fixed effects of age, fixed effects of age change
+              CORT + CORTxAge_wave1.c +  CORTxAge_change +
+               BRAIN + BRAINxAge_wave1.c + BRAINxAge_change +
+               # variable-dependent covariates
+                BRAIN*ICV.c +  BRAIN*scanner_confound + 
+              CORT*batch.c + CORT*meds_by_wave +
+                # covariate for all data
+               sex.c +
+               (-1 +  CORT + CORTxAge_change +
+               BRAIN +  BRAINxAge_change | IDENT_SUBID), 
+              data = merged_brms, chains = 4, cores = 4, 
+             control = list(max_treedepth = 15))
+
+
+save(model2, file = "brms_cort_brain_stacked_with_age_int_and_age_change_with_covariates.Rdata")
+#load(file = "models/brms_cort_brain_stacked_with_age_int_and_age_change_with_covariates.Rdata")
+summary(model2)
+```
+
+
